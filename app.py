@@ -119,9 +119,6 @@ class ResultProcessor:
         os.makedirs('temp', exist_ok=True)
         
         # Import required libraries for Excel formatting
-        from openpyxl import Workbook
-        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
-        from openpyxl.utils import get_column_letter
         
         # Create workbook and worksheet
         wb = Workbook()
@@ -371,15 +368,59 @@ class ResultProcessor:
         
         return filepath
     
-    def save_to_csv(self, df, filename):
-        """Save DataFrame to CSV file"""
-        if df.empty:
+    def save_to_csv(self, results, filename):
+        """Save results to CSV format"""
+        if not results:
             return None
         
         filepath = os.path.join('temp', filename)
         os.makedirs('temp', exist_ok=True)
         
-        df.to_csv(filepath, index=False)
+        # Collect all unique subject names
+        all_subjects = set()
+        for result in results:
+            if 'subjects' in result and result['subjects']:
+                if isinstance(result['subjects'], dict):
+                    all_subjects.update(result['subjects'].keys())
+        
+        # Create CSV content manually
+        csv_lines = []
+        
+        # Header row
+        header = ['Registration Number', 'Name', 'Semester', 'Year', 'SGPA', 'CGPA', 'Result']
+        for subject in sorted(all_subjects):
+            header.extend([f'{subject}_Marks', f'{subject}_Grade'])
+        csv_lines.append(','.join(header))
+        
+        # Data rows
+        for result in results:
+            row = [
+                result.get('registration_number', ''),
+                result.get('name', ''),
+                str(result.get('semester', '')),
+                str(result.get('year', '')),
+                result.get('sgpa', ''),
+                result.get('cgpa', ''),
+                result.get('result', '')
+            ]
+            
+            # Add subject data
+            for subject in sorted(all_subjects):
+                if 'subjects' in result and isinstance(result['subjects'], dict) and subject in result['subjects']:
+                    subject_data = result['subjects'][subject]
+                    if isinstance(subject_data, dict):
+                        row.extend([subject_data.get('marks', ''), subject_data.get('grade', '')])
+                    else:
+                        row.extend([str(subject_data), ''])
+                else:
+                    row.extend(['', ''])
+            
+            csv_lines.append(','.join([f'"{str(cell)}"' for cell in row]))
+        
+        # Write to file
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write('\n'.join(csv_lines))
+        
         return filepath
 
 @app.route('/')
