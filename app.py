@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
 from flask_session import Session
+import pandas as pd
 import os
 from datetime import datetime, timedelta
 import re
@@ -7,10 +8,6 @@ import time
 import io
 from werkzeug.utils import secure_filename
 from scraper import BEUResultScraper
-from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
-from openpyxl.utils import get_column_letter
-import xlsxwriter
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'beu-results-automation-2024'
@@ -73,7 +70,7 @@ class ResultProcessor:
         return list(range(1, available_semesters + 1))
     
     def convert_to_dataframe(self, results_data):
-        """Convert scraped results to data structure"""
+        """Convert scraped results to pandas DataFrame"""
         df_data = []
         
         for result in results_data:
@@ -104,8 +101,14 @@ class ResultProcessor:
                 }
                 df_data.append(row)
         
-        # Return the data structure directly (no pandas needed)
-        return df_data
+        # Create DataFrame
+        df = pd.DataFrame(df_data)
+        
+        # Sort by registration number and semester
+        if not df.empty and 'Registration Number' in df.columns and 'Semester' in df.columns:
+            df = df.sort_values(['Registration Number', 'Semester'])
+        
+        return df
     
     def create_formatted_excel(self, results, filename, branch_code, admission_year, selected_semesters):
         """Create formatted Excel file with college header and multi-semester layout"""
@@ -116,6 +119,9 @@ class ResultProcessor:
         os.makedirs('temp', exist_ok=True)
         
         # Import required libraries for Excel formatting
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
         
         # Create workbook and worksheet
         wb = Workbook()
@@ -335,88 +341,45 @@ class ResultProcessor:
         wb.save(filepath)
         return filepath
     
-    def save_to_excel(self, data, filename):
-        """Save data to Excel file with formatting (legacy method)"""
-        if not data:
+    def save_to_excel(self, df, filename):
+        """Save DataFrame to Excel file with formatting (legacy method)"""
+        if df.empty:
             return None
         
         filepath = os.path.join('temp', filename)
         os.makedirs('temp', exist_ok=True)
         
-        # Create workbook manually
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Results"
-        
-        # Get headers from first row
-        if data:
-            headers = list(data[0].keys())
+        with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
+            df.to_excel(writer, sheet_name='Results', index=False)
             
-            # Write headers
-            for col, header in enumerate(headers, 1):
-                ws.cell(row=1, column=col, value=header)
+            # Get the workbook and worksheet
+            workbook = writer.book
+            worksheet = writer.sheets['Results']
             
-            # Write data
-            for row, item in enumerate(data, 2):
-                for col, header in enumerate(headers, 1):
-                    ws.cell(row=row, column=col, value=item.get(header, ''))
+            # Auto-adjust column widths
+            for column in worksheet.columns:
+                max_length = 0
+                column_letter = column[0].column_letter
+                for cell in column:
+                    try:
+                        if len(str(cell.value)) > max_length:
+                            max_length = len(str(cell.value))
+                    except:
+                        pass
+                adjusted_width = min(max_length + 2, 50)
+                worksheet.column_dimensions[column_letter].width = adjusted_width
         
-        wb.save(filepath)
         return filepath
     
-    def save_to_csv(self, results, filename):
-        """Save results to CSV format"""
-        if not results:
+    def save_to_csv(self, df, filename):
+        """Save DataFrame to CSV file"""
+        if df.empty:
             return None
         
         filepath = os.path.join('temp', filename)
         os.makedirs('temp', exist_ok=True)
         
-        # Collect all unique subject names
-        all_subjects = set()
-        for result in results:
-            if 'subjects' in result and result['subjects']:
-                if isinstance(result['subjects'], dict):
-                    all_subjects.update(result['subjects'].keys())
-        
-        # Create CSV content manually
-        csv_lines = []
-        
-        # Header row
-        header = ['Registration Number', 'Name', 'Semester', 'Year', 'SGPA', 'CGPA', 'Result']
-        for subject in sorted(all_subjects):
-            header.extend([f'{subject}_Marks', f'{subject}_Grade'])
-        csv_lines.append(','.join(header))
-        
-        # Data rows
-        for result in results:
-            row = [
-                result.get('registration_number', ''),
-                result.get('name', ''),
-                str(result.get('semester', '')),
-                str(result.get('year', '')),
-                result.get('sgpa', ''),
-                result.get('cgpa', ''),
-                result.get('result', '')
-            ]
-            
-            # Add subject data
-            for subject in sorted(all_subjects):
-                if 'subjects' in result and isinstance(result['subjects'], dict) and subject in result['subjects']:
-                    subject_data = result['subjects'][subject]
-                    if isinstance(subject_data, dict):
-                        row.extend([subject_data.get('marks', ''), subject_data.get('grade', '')])
-                    else:
-                        row.extend([str(subject_data), ''])
-                else:
-                    row.extend(['', ''])
-            
-            csv_lines.append(','.join([f'"{str(cell)}"' for cell in row]))
-        
-        # Write to file
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(csv_lines))
-        
+        df.to_csv(filepath, index=False)
         return filepath
 
 @app.route('/')
@@ -619,5 +582,4 @@ def logout():
     return redirect(url_for('login'))
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(debug=True, host='0.0.0.0', port=5000)

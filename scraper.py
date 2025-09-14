@@ -5,33 +5,14 @@ import re
 from datetime import datetime
 import json
 
-# Conditional selenium imports for deployment compatibility
-try:
-    from selenium import webdriver
-    from selenium.webdriver.chrome.options import Options
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.keys import Keys
-    from webdriver_manager.chrome import ChromeDriverManager
-    SELENIUM_AVAILABLE = True
-except ImportError:
-    SELENIUM_AVAILABLE = False
-    print("Selenium not available - using requests fallback only")
-
 class BEUResultScraper:
     def __init__(self):
         self.base_url = 'https://results.beup.ac.in/'
         self.session = requests.Session()
         self.driver = None
-        self.current_page_content = None
         
     def setup_driver(self):
         """Setup Chrome WebDriver with appropriate options"""
-        if not SELENIUM_AVAILABLE:
-            print("Selenium not available, skipping WebDriver setup")
-            return False
-            
         try:
             chrome_options = Options()
             chrome_options.add_argument('--headless')  # Run in background
@@ -76,16 +57,13 @@ class BEUResultScraper:
         try:
             # Try WebDriver first, fallback to requests if it fails
             try:
-                if SELENIUM_AVAILABLE and not self.driver:
+                if not self.driver:
                     self.setup_driver()
                 
-                if self.driver:
-                    self.driver.get(self.base_url)
-                    time.sleep(3)
-                    page_source = self.driver.page_source
-                    print("Using WebDriver to fetch page")
-                else:
-                    raise Exception("WebDriver not available")
+                self.driver.get(self.base_url)
+                time.sleep(3)
+                page_source = self.driver.page_source
+                print("Using WebDriver to fetch page")
             except Exception as driver_error:
                 print(f"WebDriver failed, using requests fallback: {driver_error}")
                 # Fallback to requests
@@ -194,215 +172,127 @@ class BEUResultScraper:
             return []
     
     def navigate_to_semester_results(self, semester_link):
-        """Navigate to semester results page using multiple methods"""
-        # Try WebDriver first if available
-        if SELENIUM_AVAILABLE and self.driver:
-            try:
-                success = False
-                
-                # Method 1: Direct URL navigation if href is available
-                if semester_link.get('href') and 'http' in semester_link['href']:
-                    try:
-                        self.driver.get(semester_link['href'])
-                        success = True
-                    except:
-                        pass
-                
-                # Method 2: Click the element if available
-                if not success and semester_link.get('element'):
-                    try:
-                        element = semester_link['element']
-                        # Scroll to element first
-                        self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
-                        time.sleep(1)
-                        # Click using JavaScript
-                        self.driver.execute_script("arguments[0].click();", element)
-                        success = True
-                    except:
-                        pass
-                
-                # Method 3: Execute postback if available
-                if not success and semester_link.get('href'):
-                    try:
-                        href = semester_link['href']
-                        if 'doPostBack' in href:
-                            postback_match = re.search(r"doPostBack\('([^']+)','([^']*)'\)", href)
-                            target = postback_match.group(1)
-                            argument = postback_match.group(2)
-                            script = f"__doPostBack('{target}','{argument}')"
-                            self.driver.execute_script(script)
-                            success = True
-                    except:
-                        pass
-                
-                if success:
-                    time.sleep(3)  # Wait for page to load
-                    return True
-                    
-            except Exception as e:
-                print(f"WebDriver navigation failed: {e}")
-        
-        # Fallback: Use requests to navigate to semester results
-        print("Using requests fallback for navigation")
+        """Navigate to specific semester results page"""
         try:
-            if semester_link.get('href'):
-                # If we have a direct URL, use it
-                if 'http' in semester_link['href']:
-                    response = self.session.get(semester_link['href'])
-                    if response.status_code == 200:
-                        print("Successfully navigated using requests")
-                        # Store the response for later use in extraction
-                        self.current_page_content = response.text
-                        return True
-                else:
-                    # Try to construct the full URL
-                    full_url = self.base_url.rstrip('/') + '/' + semester_link['href'].lstrip('/')
-                    response = self.session.get(full_url)
-                    if response.status_code == 200:
-                        print("Successfully navigated using requests with constructed URL")
-                        # Store the response for later use in extraction
-                        self.current_page_content = response.text
-                        return True
+            if not self.driver:
+                self.setup_driver()
             
-            print(f"Failed to navigate to semester results: {semester_link['text']}")
+            # Try different navigation methods
+            success = False
+            
+            # Method 1: Direct URL navigation if href is available
+            if semester_link.get('href') and 'http' in semester_link['href']:
+                try:
+                    self.driver.get(semester_link['href'])
+                    success = True
+                except:
+                    pass
+            
+            # Method 2: Click the element if available
+            if not success and 'element' in semester_link and semester_link['element']:
+                try:
+                    element = semester_link['element']
+                    # Scroll to element first
+                    self.driver.execute_script("arguments[0].scrollIntoView(true);", element)
+                    time.sleep(1)
+                    # Click using JavaScript
+                    self.driver.execute_script("arguments[0].click();", element)
+                    success = True
+                except:
+                    pass
+            
+            # Method 3: Use JavaScript postback if href contains __doPostBack
+            if not success and semester_link.get('href') and '__doPostBack' in semester_link['href']:
+                try:
+                    postback_match = re.search(r"__doPostBack\('([^']+)','([^']*)'\)", semester_link['href'])
+                    if postback_match:
+                        target = postback_match.group(1)
+                        argument = postback_match.group(2)
+                        script = f"__doPostBack('{target}','{argument}')"
+                        self.driver.execute_script(script)
+                        success = True
+                except:
+                    pass
+            
+            if success:
+                # Wait for page to load
+                WebDriverWait(self.driver, 15).until(
+                    EC.presence_of_element_located((By.TAG_NAME, "body"))
+                )
+                time.sleep(3)
+                return True
+            
             return False
-                
         except Exception as e:
             print(f"Error navigating to semester results: {e}")
             return False
     
     def search_student_result(self, registration_number):
         """Search for a specific student's result"""
-        # Try WebDriver first if available
-        if SELENIUM_AVAILABLE and self.driver:
-            try:
-                # Look for registration number input field with various possible names/ids
-                possible_selectors = [
-                    "//input[contains(@name, 'reg')]",
-                    "//input[contains(@id, 'reg')]",
-                    "//input[contains(@name, 'RegNo')]",
-                    "//input[contains(@id, 'RegNo')]",
-                    "//input[contains(@name, 'txtRegNo')]",
-                    "//input[contains(@id, 'txtRegNo')]",
-                    "//input[@type='text']"
+        try:
+            # Look for registration number input field with various possible names/ids
+            possible_selectors = [
+                "//input[contains(@name, 'reg')]",
+                "//input[contains(@id, 'reg')]",
+                "//input[contains(@placeholder, 'reg')]",
+                "//input[contains(@name, 'roll')]",
+                "//input[contains(@id, 'roll')]",
+                "//input[contains(@placeholder, 'roll')]",
+                "//input[contains(@name, 'student')]",
+                "//input[contains(@id, 'student')]",
+                "//input[@type='text']"
+            ]
+            
+            reg_input = None
+            for selector in possible_selectors:
+                reg_inputs = self.driver.find_elements(By.XPATH, selector)
+                if reg_inputs:
+                    reg_input = reg_inputs[0]
+                    break
+            
+            if reg_input:
+                # Clear and enter registration number
+                reg_input.clear()
+                reg_input.send_keys(registration_number)
+                
+                # Look for submit button with various possible texts
+                submit_selectors = [
+                    "//input[@type='submit']",
+                    "//button[@type='submit']",
+                    "//button[contains(text(), 'Submit')]",
+                    "//button[contains(text(), 'Search')]",
+                    "//button[contains(text(), 'Get')]",
+                    "//button[contains(text(), 'Show')]",
+                    "//input[@value='Submit']",
+                    "//input[@value='Search']",
+                    "//input[@value='Get Result']"
                 ]
                 
-                reg_input = None
-                for selector in possible_selectors:
-                    reg_inputs = self.driver.find_elements(By.XPATH, selector)
-                    if reg_inputs:
-                        reg_input = reg_inputs[0]
+                submit_button = None
+                for selector in submit_selectors:
+                    buttons = self.driver.find_elements(By.XPATH, selector)
+                    if buttons:
+                        submit_button = buttons[0]
                         break
-            
-                if reg_input:
-                    # Clear and enter registration number
-                    reg_input.clear()
-                    reg_input.send_keys(registration_number)
-                    
-                    # Look for submit button with various possible texts
-                    submit_selectors = [
-                        "//input[@type='submit']",
-                        "//button[@type='submit']",
-                        "//button[contains(text(), 'Submit')]",
-                        "//button[contains(text(), 'Search')]",
-                        "//button[contains(text(), 'Get')]",
-                        "//button[contains(text(), 'Show')]",
-                        "//input[@value='Submit']",
-                        "//input[@value='Search']",
-                        "//input[@value='Get Result']"
-                    ]
-                    
-                    submit_button = None
-                    for selector in submit_selectors:
-                        buttons = self.driver.find_elements(By.XPATH, selector)
-                        if buttons:
-                            submit_button = buttons[0]
-                            break
-                    
-                    if submit_button:
-                        # Click submit button
-                        self.driver.execute_script("arguments[0].click();", submit_button)
-                        
-                        # Wait for result to load
-                        if SELENIUM_AVAILABLE:
-                            WebDriverWait(self.driver, 15).until(
-                                EC.presence_of_element_located((By.TAG_NAME, "body"))
-                            )
-                        time.sleep(3)
-                        
-                        return True
-                    else:
-                        # Try pressing Enter if no submit button found
-                        if SELENIUM_AVAILABLE:
-                            reg_input.send_keys(Keys.RETURN)
-                        time.sleep(3)
-                        return True
                 
-                return False
-            except Exception as e:
-                print(f"WebDriver search failed: {e}")
-        
-        # Fallback: Use requests to search for student result
-        print("Using requests fallback for student search")
-        try:
-            # Parse the current page to find form details
-            if hasattr(self, 'current_page_content') and self.current_page_content:
-                soup = BeautifulSoup(self.current_page_content, 'html.parser')
-                
-                # Find the form for student search
-                form = soup.find('form')
-                if form:
-                    # Get form action and method
-                    action = form.get('action', '')
-                    method = form.get('method', 'GET').upper()
+                if submit_button:
+                    # Click submit button
+                    self.driver.execute_script("arguments[0].click();", submit_button)
                     
-                    # Find input fields
-                    inputs = form.find_all('input')
-                    form_data = {}
+                    # Wait for result to load
+                    WebDriverWait(self.driver, 15).until(
+                        EC.presence_of_element_located((By.TAG_NAME, "body"))
+                    )
+                    time.sleep(3)
                     
-                    for input_field in inputs:
-                        name = input_field.get('name', '')
-                        input_type = input_field.get('type', 'text')
-                        value = input_field.get('value', '')
-                        
-                        # Set registration number for relevant fields
-                        if any(keyword in name.lower() for keyword in ['reg', 'regno', 'registration']):
-                            form_data[name] = registration_number
-                        elif input_type in ['hidden', 'submit']:
-                            form_data[name] = value
-                    
-                    # Construct URL for form submission
-                    if action:
-                        if action.startswith('http'):
-                            submit_url = action
-                        else:
-                            submit_url = self.base_url.rstrip('/') + '/' + action.lstrip('/')
-                    else:
-                        submit_url = self.base_url
-                    
-                    # Submit the form
-                    if method == 'POST':
-                        response = self.session.post(submit_url, data=form_data)
-                    else:
-                        response = self.session.get(submit_url, params=form_data)
-                    
-                    if response.status_code == 200:
-                        print("Successfully searched using requests with form submission")
-                        self.current_page_content = response.text
-                        return True
+                    return True
+                else:
+                    # Try pressing Enter if no submit button found
+                    reg_input.send_keys(Keys.RETURN)
+                    time.sleep(3)
+                    return True
             
-            # Simple fallback - direct URL construction
-            search_url = f"{self.base_url}?reg={registration_number}"
-            response = self.session.get(search_url)
-            
-            if response.status_code == 200:
-                print("Successfully searched using requests")
-                self.current_page_content = response.text
-                return True
-            else:
-                print(f"Failed to search for student {registration_number} using requests")
-                return False
-                
+            return False
         except Exception as e:
             print(f"Error searching for student {registration_number}: {e}")
             return False
@@ -422,17 +312,7 @@ class BEUResultScraper:
                 'error': None
             }
             
-            # Get page source from WebDriver or requests
-            page_source = None
-            if SELENIUM_AVAILABLE and self.driver:
-                page_source = self.driver.page_source
-            elif hasattr(self, 'current_page_content') and self.current_page_content:
-                page_source = self.current_page_content
-                print("Using stored page content for extraction")
-            else:
-                print("No page content available for extraction")
-                result_data['error'] = 'No page content available'
-                return result_data
+            page_source = self.driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
             
             # Debug: Save page source for inspection
@@ -710,9 +590,8 @@ class BEUResultScraper:
                         })
                     
                     # Go back to search page for next student
-                    if SELENIUM_AVAILABLE and self.driver:
-                        self.driver.back()
-                        time.sleep(1)
+                    self.driver.back()
+                    time.sleep(1)
                     
                 except Exception as e:
                     print(f"Error processing student {reg_number}: {e}")
@@ -725,9 +604,8 @@ class BEUResultScraper:
                     
                     # Try to go back to search page
                     try:
-                        if SELENIUM_AVAILABLE and self.driver:
-                            self.driver.back()
-                            time.sleep(1)
+                        self.driver.back()
+                        time.sleep(1)
                     except:
                         # Re-navigate to semester page if back fails
                         self.navigate_to_semester_results(semester_link)
@@ -757,9 +635,8 @@ class BEUResultScraper:
                 
                 # Go back to homepage before each semester
                 print("Returning to homepage...")
-                if SELENIUM_AVAILABLE and self.driver:
-                    self.driver.get(self.base_url)
-                    time.sleep(3)
+                self.driver.get(self.base_url)
+                time.sleep(3)
                 
                 # Get fresh links with admission year filter
                 fresh_links = self.get_available_result_links(admission_year)
