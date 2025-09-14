@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, send_file
 from flask_session import Session
-import pandas as pd
 import os
 from datetime import datetime, timedelta
 import re
@@ -8,6 +7,10 @@ import time
 import io
 from werkzeug.utils import secure_filename
 from scraper import BEUResultScraper
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Border, Side, Alignment
+from openpyxl.utils import get_column_letter
+import xlsxwriter
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'beu-results-automation-2024'
@@ -70,7 +73,7 @@ class ResultProcessor:
         return list(range(1, available_semesters + 1))
     
     def convert_to_dataframe(self, results_data):
-        """Convert scraped results to pandas DataFrame"""
+        """Convert scraped results to data structure"""
         df_data = []
         
         for result in results_data:
@@ -101,14 +104,8 @@ class ResultProcessor:
                 }
                 df_data.append(row)
         
-        # Create DataFrame
-        df = pd.DataFrame(df_data)
-        
-        # Sort by registration number and semester
-        if not df.empty and 'Registration Number' in df.columns and 'Semester' in df.columns:
-            df = df.sort_values(['Registration Number', 'Semester'])
-        
-        return df
+        # Return the data structure directly (no pandas needed)
+        return df_data
     
     def create_formatted_excel(self, results, filename, branch_code, admission_year, selected_semesters):
         """Create formatted Excel file with college header and multi-semester layout"""
@@ -338,34 +335,33 @@ class ResultProcessor:
         wb.save(filepath)
         return filepath
     
-    def save_to_excel(self, df, filename):
-        """Save DataFrame to Excel file with formatting (legacy method)"""
-        if df.empty:
+    def save_to_excel(self, data, filename):
+        """Save data to Excel file with formatting (legacy method)"""
+        if not data:
             return None
         
         filepath = os.path.join('temp', filename)
         os.makedirs('temp', exist_ok=True)
         
-        with pd.ExcelWriter(filepath, engine='openpyxl') as writer:
-            df.to_excel(writer, sheet_name='Results', index=False)
-            
-            # Get the workbook and worksheet
-            workbook = writer.book
-            worksheet = writer.sheets['Results']
-            
-            # Auto-adjust column widths
-            for column in worksheet.columns:
-                max_length = 0
-                column_letter = column[0].column_letter
-                for cell in column:
-                    try:
-                        if len(str(cell.value)) > max_length:
-                            max_length = len(str(cell.value))
-                    except:
-                        pass
-                adjusted_width = min(max_length + 2, 50)
-                worksheet.column_dimensions[column_letter].width = adjusted_width
+        # Create workbook manually
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Results"
         
+        # Get headers from first row
+        if data:
+            headers = list(data[0].keys())
+            
+            # Write headers
+            for col, header in enumerate(headers, 1):
+                ws.cell(row=1, column=col, value=header)
+            
+            # Write data
+            for row, item in enumerate(data, 2):
+                for col, header in enumerate(headers, 1):
+                    ws.cell(row=row, column=col, value=item.get(header, ''))
+        
+        wb.save(filepath)
         return filepath
     
     def save_to_csv(self, results, filename):
