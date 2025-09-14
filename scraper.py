@@ -1,17 +1,23 @@
 import requests
 from bs4 import BeautifulSoup
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 import time
 import re
 from datetime import datetime
 import json
+
+# Conditional selenium imports for deployment compatibility
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.common.keys import Keys
+    from webdriver_manager.chrome import ChromeDriverManager
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
+    print("Selenium not available - using requests fallback only")
 
 class BEUResultScraper:
     def __init__(self):
@@ -21,6 +27,10 @@ class BEUResultScraper:
         
     def setup_driver(self):
         """Setup Chrome WebDriver with appropriate options"""
+        if not SELENIUM_AVAILABLE:
+            print("Selenium not available, skipping WebDriver setup")
+            return False
+            
         try:
             chrome_options = Options()
             chrome_options.add_argument('--headless')  # Run in background
@@ -65,13 +75,16 @@ class BEUResultScraper:
         try:
             # Try WebDriver first, fallback to requests if it fails
             try:
-                if not self.driver:
+                if SELENIUM_AVAILABLE and not self.driver:
                     self.setup_driver()
                 
-                self.driver.get(self.base_url)
-                time.sleep(3)
-                page_source = self.driver.page_source
-                print("Using WebDriver to fetch page")
+                if self.driver:
+                    self.driver.get(self.base_url)
+                    time.sleep(3)
+                    page_source = self.driver.page_source
+                    print("Using WebDriver to fetch page")
+                else:
+                    raise Exception("WebDriver not available")
             except Exception as driver_error:
                 print(f"WebDriver failed, using requests fallback: {driver_error}")
                 # Fallback to requests
@@ -180,12 +193,12 @@ class BEUResultScraper:
             return []
     
     def navigate_to_semester_results(self, semester_link):
-        """Navigate to specific semester results page"""
-        try:
-            if not self.driver:
-                self.setup_driver()
+        """Navigate to semester results page using multiple methods"""
+        if not SELENIUM_AVAILABLE or not self.driver:
+            print("WebDriver not available for navigation")
+            return False
             
-            # Try different navigation methods
+        try:
             success = False
             
             # Method 1: Direct URL navigation if href is available
@@ -197,7 +210,7 @@ class BEUResultScraper:
                     pass
             
             # Method 2: Click the element if available
-            if not success and 'element' in semester_link and semester_link['element']:
+            if not success and semester_link.get('element'):
                 try:
                     element = semester_link['element']
                     # Scroll to element first
@@ -209,11 +222,12 @@ class BEUResultScraper:
                 except:
                     pass
             
-            # Method 3: Use JavaScript postback if href contains __doPostBack
-            if not success and semester_link.get('href') and '__doPostBack' in semester_link['href']:
+            # Method 3: Execute postback if available
+            if not success and semester_link.get('href'):
                 try:
-                    postback_match = re.search(r"__doPostBack\('([^']+)','([^']*)'\)", semester_link['href'])
-                    if postback_match:
+                    href = semester_link['href']
+                    if 'doPostBack' in href:
+                        postback_match = re.search(r"doPostBack\('([^']+)','([^']*)'\)", href)
                         target = postback_match.group(1)
                         argument = postback_match.group(2)
                         script = f"__doPostBack('{target}','{argument}')"
@@ -223,31 +237,31 @@ class BEUResultScraper:
                     pass
             
             if success:
-                # Wait for page to load
-                WebDriverWait(self.driver, 15).until(
-                    EC.presence_of_element_located((By.TAG_NAME, "body"))
-                )
-                time.sleep(3)
+                time.sleep(3)  # Wait for page to load
                 return True
-            
-            return False
+            else:
+                print(f"Failed to navigate to semester results: {semester_link['text']}")
+                return False
+                
         except Exception as e:
             print(f"Error navigating to semester results: {e}")
             return False
     
     def search_student_result(self, registration_number):
         """Search for a specific student's result"""
+        if not SELENIUM_AVAILABLE or not self.driver:
+            print("WebDriver not available for student search")
+            return False
+            
         try:
             # Look for registration number input field with various possible names/ids
             possible_selectors = [
                 "//input[contains(@name, 'reg')]",
                 "//input[contains(@id, 'reg')]",
-                "//input[contains(@placeholder, 'reg')]",
-                "//input[contains(@name, 'roll')]",
-                "//input[contains(@id, 'roll')]",
-                "//input[contains(@placeholder, 'roll')]",
-                "//input[contains(@name, 'student')]",
-                "//input[contains(@id, 'student')]",
+                "//input[contains(@name, 'RegNo')]",
+                "//input[contains(@id, 'RegNo')]",
+                "//input[contains(@name, 'txtRegNo')]",
+                "//input[contains(@id, 'txtRegNo')]",
                 "//input[@type='text']"
             ]
             
@@ -288,7 +302,8 @@ class BEUResultScraper:
                     self.driver.execute_script("arguments[0].click();", submit_button)
                     
                     # Wait for result to load
-                    WebDriverWait(self.driver, 15).until(
+                    if SELENIUM_AVAILABLE:
+                        WebDriverWait(self.driver, 15).until(
                         EC.presence_of_element_located((By.TAG_NAME, "body"))
                     )
                     time.sleep(3)
@@ -296,7 +311,8 @@ class BEUResultScraper:
                     return True
                 else:
                     # Try pressing Enter if no submit button found
-                    reg_input.send_keys(Keys.RETURN)
+                    if SELENIUM_AVAILABLE:
+                        reg_input.send_keys(Keys.RETURN)
                     time.sleep(3)
                     return True
             
@@ -319,6 +335,11 @@ class BEUResultScraper:
                 'result': '',
                 'error': None
             }
+            
+            if not SELENIUM_AVAILABLE or not self.driver:
+                print("WebDriver not available for result extraction")
+                result_data['error'] = 'WebDriver not available'
+                return result_data
             
             page_source = self.driver.page_source
             soup = BeautifulSoup(page_source, 'html.parser')
@@ -598,8 +619,9 @@ class BEUResultScraper:
                         })
                     
                     # Go back to search page for next student
-                    self.driver.back()
-                    time.sleep(1)
+                    if SELENIUM_AVAILABLE and self.driver:
+                        self.driver.back()
+                        time.sleep(1)
                     
                 except Exception as e:
                     print(f"Error processing student {reg_number}: {e}")
@@ -612,8 +634,9 @@ class BEUResultScraper:
                     
                     # Try to go back to search page
                     try:
-                        self.driver.back()
-                        time.sleep(1)
+                        if SELENIUM_AVAILABLE and self.driver:
+                            self.driver.back()
+                            time.sleep(1)
                     except:
                         # Re-navigate to semester page if back fails
                         self.navigate_to_semester_results(semester_link)
@@ -643,8 +666,9 @@ class BEUResultScraper:
                 
                 # Go back to homepage before each semester
                 print("Returning to homepage...")
-                self.driver.get(self.base_url)
-                time.sleep(3)
+                if SELENIUM_AVAILABLE and self.driver:
+                    self.driver.get(self.base_url)
+                    time.sleep(3)
                 
                 # Get fresh links with admission year filter
                 fresh_links = self.get_available_result_links(admission_year)
